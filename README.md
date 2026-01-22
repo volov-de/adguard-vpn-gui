@@ -23,7 +23,7 @@
 
 ##  Установка
 
-### 1. Установка AdGuard VPN CLI
+### Установка AdGuard VPN CLI
 Если у вас еще не установлен CLI клиент, выполните команду:
 ```bash
 curl -s https://raw.githubusercontent.com/AdguardTeam/AdGuardVPNCLI/master/scripts/install.sh | sh
