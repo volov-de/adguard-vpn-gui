@@ -1,0 +1,34 @@
+name: Pylint
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v3
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-pyqt5  # Устанавливаем системный пакет PyQt5
+        python -m pip install --upgrade pip
+        pip install pylint
+        # Если нужно, можно установить PyQt5 через pip, но системный надежнее для Qt
+        # pip install PyQt5 
+
+    - name: Analysing the code with pylint
+      run: |
+        # Запускаем pylint, игнорируя ошибки импорта (E0401), если environment сложный,
+        # или просто проверяем синтаксис и базовые ошибки.
+        # Можно отключить проверку naming style (C0103), так как у нас GUI
+        pylint $(git ls-files '*.py') --disable=C0114,C0115,C0116,E0401
