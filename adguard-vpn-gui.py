@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name, too-few-public-methods
 """
 AdGuard VPN GUI Control
 A simple PyQt5 GUI wrapper for AdGuard VPN CLI on Linux.
@@ -292,4 +293,206 @@ class AdGuardVPNGUI(QMainWindow): # pylint: disable=too-many-instance-attributes
     def check_login(self):
         """Start background check for login status."""
         self.w_login = Worker(f"{BINARY_NAME} list-locations")
-        self.w_login.finished.conn
+        self.w_login.finished.connect(self.on_login_checked)
+        self.w_login.start()
+
+    def on_login_checked(self, success, output):
+        """Callback for login check."""
+        if not success and ("login" in output.lower() or "auth" in output.lower()):
+            self.show_login_screen()
+        else:
+            self.show_main_screen()
+            if success:
+                self.parse_locations(output)
+            self.check_status_routine()
+
+    def check_status_routine(self):
+        """Periodic status check."""
+        if not self.is_logged_in:
+            return
+        if "Ввод пароля" in self.status_label.text():
+            return
+        if self.w_status and self.w_status.isRunning():
+            return
+
+        self.w_status = Worker(f"{BINARY_NAME} status")
+        self.w_status.finished.connect(self.update_status_ui)
+        self.w_status.start()
+
+    # pylint: disable=unused-argument
+    def update_status_ui(self, success, output):
+        """Callback for status update."""
+        if not self.is_logged_in:
+            return
+        self.parse_and_apply_status(output)
+
+    def parse_and_apply_status(self, output):
+        """Parse status text and update UI."""
+        text = output.lower()
+
+        if "disconnected" in text or "vpn stopped" in text:
+            if "DISCONNECTED" not in self.status_label.text():
+                self.status_label.setText("DISCONNECTED")
+                self.status_label.setStyleSheet("color: #D32F2F")
+                self.info_label.setText("Нет подключения")
+                self.current_city = None
+                self.set_buttons_logic()
+
+        elif "connected" in text and ("successfully" in text or "to" in text):
+            if "CONNECTED" not in self.status_label.text():
+                self.status_label.setText("CONNECTED")
+                self.status_label.setStyleSheet("color: #388E3C")
+
+                city = "Неизвестно"
+                if "connected to" in text:
+                    parts = output.split("to ", 1)
+                    if len(parts) > 1:
+                        rest = parts[1]
+                        if " in " in rest:
+                            city = rest.split(" in ")[0].strip()
+                        else:
+                            city = rest.split("\n")[0].strip()
+
+                self.info_label.setText(f"Локация: {city}")
+                self.current_city = city
+                self.set_buttons_logic()
+
+        if "CONNECTED" not in self.status_label.text():
+            self.combo.setEnabled(True)
+
+    def parse_locations(self, output):
+        """Parse available locations and fill combo box."""
+        self.combo.clear()
+        locations = []
+        for line in output.split('\n'):
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            id_code = parts[0]
+            if len(id_code) != 2 or not id_code.isalpha():
+                continue
+            ping_str = parts[-1]
+            if not ping_str.isdigit():
+                continue
+            # Store tuple: (ping, display_text, country_code)
+            locations.append((
+                int(ping_str),
+                f"[{ping_str} ms]  {' '.join(parts[1:-1])} ({id_code})",
+                id_code
+            ))
+
+        locations.sort(key=lambda x: x[0])
+        for _, display, code in locations:
+            self.combo.addItem(display, code)
+
+        if self.current_city:
+            self.select_combo_text(self.current_city)
+
+        self.combo.setEnabled(True)
+        if "CONNECTED" not in self.status_label.text():
+            self.btn_connect.setEnabled(True)
+
+    def select_combo_text(self, text):
+        """Select item in combo box by text."""
+        if not text:
+            return
+        text = text.lower()
+        for i in range(self.combo.count()):
+            if text in self.combo.itemText(i).lower():
+                self.combo.setCurrentIndex(i)
+                return
+
+    def connect_vpn(self):
+        """Initiate VPN connection."""
+        code = self.combo.currentData()
+        if not code:
+            QMessageBox.warning(self, "Ошибка", "Выберите локацию из списка!")
+            return
+
+        self.btn_connect.setEnabled(False)
+        self.btn_disconnect.setEnabled(False)
+        self.combo.setEnabled(False)
+        self.status_label.setText("Ввод пароля...")
+        self.status_label.setStyleSheet("color: #555")
+
+        self.w_act = Worker(f"{BINARY_NAME} connect -l {code}", needs_root=True)
+        self.w_act.finished.connect(self.on_act_done)
+        self.w_act.start()
+
+    def disconnect_vpn(self):
+        """Initiate VPN disconnection."""
+        self.btn_connect.setEnabled(False)
+        self.btn_disconnect.setEnabled(False)
+        self.status_label.setText("Ввод пароля...")
+        self.status_label.setStyleSheet("color: #555")
+
+        self.w_act = Worker(f"{BINARY_NAME} disconnect", needs_root=True)
+        self.w_act.finished.connect(self.on_act_done)
+        self.w_act.start()
+
+    def on_act_done(self, success, output):
+        """Callback for connect/disconnect action."""
+        if success:
+            self.parse_and_apply_status(output)
+            # If status not parsed correctly, set temporary state
+            if ("CONNECTED" not in self.status_label.text() and
+                    "DISCONNECTED" not in self.status_label.text()):
+                self.status_label.setText("Проверка...")
+            QTimer.singleShot(1500, self.check_status_routine)
+        else:
+            if "Отмена" in output:
+                QMessageBox.information(self, "Отмена", "Ввод пароля отменен")
+            else:
+                QMessageBox.warning(self, "Ошибка", f"Ошибка:\n{output}")
+            self.check_status_routine()
+
+        QTimer.singleShot(500, self.set_buttons_logic)
+
+    # pylint: disable=invalid-name
+    def closeEvent(self, event):
+        """Handle window close event."""
+        is_connected_strict = (
+            "CONNECTED" in self.status_label.text() and
+            "DIS" not in self.status_label.text()
+        )
+
+        if is_connected_strict:
+            reply = QMessageBox.question(
+                self, 'Выход',
+                "VPN подключен. Отключить перед выходом?\n(Потребуется пароль)",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes
+            )
+
+            if reply == QMessageBox.Yes:
+                cmd_exec = f"{BINARY_NAME} disconnect"
+                if BINARY_PATH:
+                    cmd_exec = cmd_exec.replace(BINARY_NAME, BINARY_PATH, 1)
+
+                display = os.environ.get('DISPLAY', ':0')
+                xauth = os.environ.get('XAUTHORITY', '')
+                env_str = f"DISPLAY={display} XAUTHORITY={xauth} HOME={USER_HOME}"
+                final_cmd = (
+                    f"nohup pkexec env {env_str} {cmd_exec} >/dev/null 2>&1 &"
+                )
+
+                # Detached spawn to keep pkexec alive after exit
+                subprocess.Popen(
+                    final_cmd,
+                    shell=True,
+                    start_new_session=True
+                )
+                event.accept()
+            elif reply == QMessageBox.No:
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    app.setStyle(QStyleFactory.create("Fusion"))
+    window = AdGuardVPNGUI()
+    window.show()
+    sys.exit(app.exec_())
