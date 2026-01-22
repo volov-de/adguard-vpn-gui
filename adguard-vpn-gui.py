@@ -16,7 +16,7 @@ try:
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QPushButton, QComboBox, QLabel, QMessageBox, QDesktopWidget,
-        QStyleFactory, QTextEdit, QDialog
+        QTextEdit, QDialog
     )
     from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt
     from PyQt5.QtGui import QFont
@@ -477,6 +477,7 @@ class AdGuardVPNGUI(QMainWindow): # pylint: disable=too-many-instance-attributes
                 )
 
                 # Detached spawn to keep pkexec alive after exit
+                # pylint: disable=consider-using-with
                 subprocess.Popen(
                     final_cmd,
                     shell=True,
