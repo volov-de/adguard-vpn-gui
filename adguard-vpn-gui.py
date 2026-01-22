@@ -16,7 +16,7 @@ try:
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QPushButton, QComboBox, QLabel, QMessageBox, QDesktopWidget,
-        QTextEdit, QDialog
+        QStyleFactory, QTextEdit, QDialog
     )
     from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt
     from PyQt5.QtGui import QFont
