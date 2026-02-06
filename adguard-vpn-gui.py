@@ -9,8 +9,12 @@ import re
 import os
 import shutil
 
-# Fix for Wayland/Gnome environments
-os.environ["QT_QPA_PLATFORM"] = "xcb"
+# Fix for Wayland/GNOME environments.
+# Do not override user/system setting globally to avoid breaking non-X11 setups.
+if "QT_QPA_PLATFORM" not in os.environ:
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+    if session_type == "wayland" and os.environ.get("DISPLAY"):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 try:
     from PyQt5.QtWidgets import (
@@ -44,6 +48,49 @@ def clean_ansi(text):
     """Remove ANSI escape sequences from text."""
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', text)
+
+def parse_status_details(output):
+    """Return normalized status and optional city parsed from CLI output."""
+    text = output.lower()
+    if "disconnected" in text or "vpn stopped" in text:
+        return "disconnected", None
+
+    if "connected" in text and ("successfully" in text or "to" in text):
+        city = "Неизвестно"
+        if "connected to" in text:
+            parts = output.split("to ", 1)
+            if len(parts) > 1:
+                rest = parts[1]
+                if " in " in rest:
+                    city = rest.split(" in ")[0].strip()
+                else:
+                    city = rest.split("\n")[0].strip()
+        return "connected", city
+
+    return "unknown", None
+
+
+def parse_locations_text(output):
+    """Parse location list text into sorted tuples: (ping, display, country_code)."""
+    locations = []
+    for line in output.split('\n'):
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        id_code = parts[0]
+        if len(id_code) != 2 or not id_code.isalpha():
+            continue
+        ping_str = parts[-1]
+        if not ping_str.isdigit():
+            continue
+        locations.append((
+            int(ping_str),
+            f"[{ping_str} ms]  {' '.join(parts[1:-1])} ({id_code})",
+            id_code
+        ))
+
+    return sorted(locations, key=lambda x: x[0])
+
 
 class Worker(QThread):
     """Background worker for running shell commands."""
@@ -328,9 +375,9 @@ class AdGuardVPNGUI(QMainWindow): # pylint: disable=too-many-instance-attributes
 
     def parse_and_apply_status(self, output):
         """Parse status text and update UI."""
-        text = output.lower()
+        status, city = parse_status_details(output)
 
-        if "disconnected" in text or "vpn stopped" in text:
+        if status == "disconnected":
             if "DISCONNECTED" not in self.status_label.text():
                 self.status_label.setText("DISCONNECTED")
                 self.status_label.setStyleSheet("color: #D32F2F")
@@ -338,21 +385,10 @@ class AdGuardVPNGUI(QMainWindow): # pylint: disable=too-many-instance-attributes
                 self.current_city = None
                 self.set_buttons_logic()
 
-        elif "connected" in text and ("successfully" in text or "to" in text):
+        elif status == "connected":
             if "CONNECTED" not in self.status_label.text():
                 self.status_label.setText("CONNECTED")
                 self.status_label.setStyleSheet("color: #388E3C")
-
-                city = "Неизвестно"
-                if "connected to" in text:
-                    parts = output.split("to ", 1)
-                    if len(parts) > 1:
-                        rest = parts[1]
-                        if " in " in rest:
-                            city = rest.split(" in ")[0].strip()
-                        else:
-                            city = rest.split("\n")[0].strip()
-
                 self.info_label.setText(f"Локация: {city}")
                 self.current_city = city
                 self.set_buttons_logic()
@@ -363,26 +399,7 @@ class AdGuardVPNGUI(QMainWindow): # pylint: disable=too-many-instance-attributes
     def parse_locations(self, output):
         """Parse available locations and fill combo box."""
         self.combo.clear()
-        locations = []
-        for line in output.split('\n'):
-            parts = line.split()
-            if len(parts) < 3:
-                continue
-            id_code = parts[0]
-            if len(id_code) != 2 or not id_code.isalpha():
-                continue
-            ping_str = parts[-1]
-            if not ping_str.isdigit():
-                continue
-            # Store tuple: (ping, display_text, country_code)
-            locations.append((
-                int(ping_str),
-                f"[{ping_str} ms]  {' '.join(parts[1:-1])} ({id_code})",
-                id_code
-            ))
-
-        locations.sort(key=lambda x: x[0])
-        for _, display, code in locations:
+        for _, display, code in parse_locations_text(output):
             self.combo.addItem(display, code)
 
         if self.current_city:
